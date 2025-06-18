@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Локатор+ — что рядом?</title>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet/dist/leaflet.css"
+/>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f2f2f2;
+    margin: 0;
+    padding: 20px;
+    text-align: center;
+  }
+  h1 {
+    color: #2c3e50;
+  }
+  #map {
+    height: 450px;
+    width: 100%;
+    max-width: 700px;
+    margin: 20px auto;
+    border-radius: 12px;
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.2);
+  }
+  #info {
+    font-size: 16px;
+    margin-top: 10px;
+    min-height: 20px;
+  }
+  button {
+    background-color: #007bff;
+    color: white;
+    padding: 10px 22px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:hover {
+    background-color: #0056b3;
+  }
+  #places {
+    margin-top: 15px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: left;
+  }
+  #places h2 {
+    color: #34495e;
+  }
+  #places ul {
+    list-style: none;
+    padding-left: 0;
+  }
+  #places li {
+    margin-bottom: 6px;
+  }
+  #weather {
+    margin-top: 15px;
+    font-size: 18px;
+    color: #2c3e50;
+  }
+</style>
+</head>
+<body>
+
+<h1>Локатор+ — что рядом?</h1>
+<button onclick="locateAndShow()">🔍 Найти моё местоположение и всё рядом</button>
+<div id="info">Нажми кнопку выше, чтобы начать</div>
+<div id="map"></div>
+<div id="places"></div>
+<div id="weather"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+  let map, marker;
+
+  function locateAndShow() {
+    if (!navigator.geolocation) {
+      document.getElementById("info").innerText =
+        "⚠️ Геолокация не поддерживается вашим браузером.";
+      return;
+    }
+
+    document.getElementById("info").innerText = "⌛ Определяем ваше местоположение...";
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+
+        document.getElementById("info").innerText = `📍 Ваши координаты: ${lat.toFixed(
+          6
+        )}, ${lon.toFixed(6)}`;
+
+        // Инициализация карты
+        if (!map) {
+          map = L.map("map").setView([lat, lon], 15);
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "&copy; OpenStreetMap contributors",
+          }).addTo(map);
+          marker = L.marker([lat, lon]).addTo(map).bindPopup("Вы здесь").openPopup();
+        } else {
+          map.setView([lat, lon], 15);
+          marker.setLatLng([lat, lon]);
+        }
+
+        // Получаем места рядом (магазины, кафе, больницы)
+        document.getElementById("places").innerHTML = "<h2>🔎 Места рядом:</h2><p>Загрузка...</p>";
+
+        const places = await fetchNearbyPlaces(lat, lon);
+        showPlaces(places);
+
+        // Получаем погоду
+        document.getElementById("weather").innerHTML = "<p>Загрузка погоды...</p>";
+        fetchWeather(lat, lon);
+      },
+      (err) => {
+        let msg = "";
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            msg = "❌ Доступ к геолокации запрещён.";
+            break;
+          case err.POSITION_UNAVAILABLE:
+            msg = "⚠️ Местоположение недоступно.";
+            break;
+          case err.TIMEOUT:
+            msg = "⏳ Время ожидания истекло.";
+            break;
+          default:
+            msg = "❗ Произошла ошибка при определении местоположения.";
+        }
+        document.getElementById("info").innerText = msg;
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  async function fetchNearbyPlaces(lat, lon) {
+    // Overpass API запрос: магазины, кафе, больницы, аптеки
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["shop"](around:1000,${lat},${lon});
+        node["amenity"="cafe"](around:1000,${lat},${lon});
+        node["amenity"="restaurant"](around:1000,${lat},${lon});
+        node["amenity"="hospital"](around:1000,${lat},${lon});
+        node["amenity"="pharmacy"](around:1000,${lat},${lon});
+      );
+      out body;
+    `;
+
+    const url = "https://overpass-api.de/api/interpreter";
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        body: query,
+        headers: {
+          "Content-Type": "text/plain",
+        },
+      });
+      const data = await response.json();
+      return data.elements;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function showPlaces(places) {
+    if (!places || places.length === 0) {
+      document.getElementById("places").innerHTML =
+        "<h2>🔎 Места рядом:</h2><p>Места не найдены или ошибка загрузки.</p>";
+      return;
+    }
+
+    // Сгруппируем по типу
+    const grouped = {};
+    for (const p of places) {
+      const type = p.tags.shop || p.tags.amenity || "Другое";
+      if (!grouped[type]) grouped[type] = [];
+      grouped[type].push(p);
+    }
+
+    let html = "<h2>🔎 Места рядом:</h2>";
+
+    for (const [type, items] of Object.entries(grouped)) {
+      html += `<h3>${type.charAt(0).toUpperCase() + type.slice(1)} (${items.length})</h3><ul>`;
+      for (const place of items) {
+        const name = place.tags.name || "Без названия";
+        html += `<li>${name}</li>`;
+      }
+      html += "</ul>";
+    }
+
+    document.getElementById("places").innerHTML = html;
+  }
+
+  async function fetchWeather(lat, lon) {
+    // Open-Meteo без API ключа, с текущей погодой
+    try {
+      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`;
+      const res = await fetch(weatherUrl);
+      const weather = await res.json();
+
+      if (weather.current_weather) {
+        const w = weather.current_weather;
+        const weatherHtml = `
+          <h2>🌦️ Текущая погода:</h2>
+          <p>Температура: ${w.temperature}°C</p>
+          <p>Ветер: ${w.windspeed} км/ч</p>
+          <p>Направление ветра: ${w.winddirection}°</p>
+          <p>Обновлено: ${new Date(w.time).toLocaleTimeString()}</p>
+        `;
+        document.getElementById("weather").innerHTML = weatherHtml;
+      } else {
+        document.getElementById("weather").innerHTML = "<p>Погода недоступна.</p>";
+      }
+    } catch (e) {
+      document.getElementById("weather").innerHTML = "<p>Ошибка загрузки погоды.</p>";
+    }
+  }
+</script>
+
+</body>
+</html>
